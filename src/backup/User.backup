@@ -1,0 +1,194 @@
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.math.BigInteger;
+import java.util.UUID;
+
+/** Represents the registered operating system or account used by the person trying 
+  * to access a secret from the SecretServer */
+public class User {
+	private final String accountName;
+	private final SecretServer server;
+	private final boolean simMode;
+	private final String secretsfn;
+	private final String hashfn;
+	private final String pubkeysfn;
+	private final String privkeysfn;
+	private final String validusersfn;
+	private BigInteger my_d; // second half of accountName's private key
+	private BigInteger my_n; // first half of accountName's public key
+	private int my_e; // second half of accountName's public key
+	private BigInteger serv_n; // first half of SecretServer's public key
+	private int serv_e; // second half of SecretServer's public key
+	private String username;
+	private String sessionKey;
+	private int counter; // to be included in the next payload User sends
+
+	public User(String accountName, SecretServer server, boolean simMode){
+		this.accountName = accountName;
+		this.server = server;
+		this.simMode = simMode;
+
+		secretsfn = "secrets.txt";
+		hashfn = "passwords.txt";
+		pubkeysfn = "publickeys.txt";
+		privkeysfn = "privatekeys.txt";
+		validusersfn = "validusers.txt";
+
+		configureKeys(accountName);
+	}
+
+
+	/** Using a secure Bilateral Authentication Protocol which relies on public
+	  * key RSA, attempts to set up a secure session with the SecretServer using
+	  * the given username. 
+	  * Returns true if successful, false otherwise.
+	  * NOTE: Because each User's private key is stored on their own account,
+	  * this protocol will FAIL if username doesn't match accountName. */
+	public boolean connectAs(String uname) {
+		boolean noProblems = true; // no problems have been encountered
+ 
+		// First Message: A->B: Alice || E_kB(Alice || nonce_A)
+		String nonce_user = UUID.randomUUID().toString();
+		ComMethods.report(accountName+" has randomly generated a 128-bit nonce_user = "+nonce_user+".",true);
+
+		String message1 = uname + ComMethods.encryptRSA(uname + nonce_user, serv_n, BigInteger.valueOf(serv_e));
+		ComMethods.report(accountName+" is sending SecretServer the name "+uname+", concatenated with '"+uname+" || nonce_user' encrypted under RSA with the SecretServer's public key.", true);	
+		
+		String response1 = sendServer(message1,false);
+		response1 = ComMethods.decryptRSA(response1, my_n, my_d);
+		ComMethods.report(accountName+" has decrypted the SecretServer's message using "+accountName+"'s private RSA key.", true);
+		
+		// Test for proper formatting of the second message in the protocol
+		if (!response1.startsWith(nonce_user) || !response1.startsWith("SecretServer", nonce_user.length())) {
+			noProblems = false;
+			System.out.println("ERROR ~ something went wrong with the second message in the bilateral authentication protocol.");
+		} else {
+			String nonce_srvr = response1.substring(nonce_user.length() + 12, response1.length());
+			ComMethods.report(accountName+" now has nonce_srvr.", true);
+
+			sessionKey = UUID.randomUUID().toString();
+			ComMethods.report(accountName+" has generated a random 128-bit session key.", true);
+			
+			// Third Message: A->B: E_kB(nonce_B || kS)
+			String message2 = ComMethods.encryptRSA(nonce_srvr + sessionKey.toString(), serv_n, BigInteger.valueOf(serv_e));
+			ComMethods.report(accountName+" is sending the SecretServer the concatenation of nonce_srvr and the session key, encrypted under RSA using the SecretServer's public key.", true);
+
+			String response2 = sendServer(message2, false);
+			response2 = ComMethods.processPayload(response2, "SecretServer", 11, sessionKey, simMode);
+			ComMethods.report(accountName+" has decrypted the SecretServer's message using the symmetric session key that "+accountName+" just generated.", true);
+
+			// Test formatting of the 4th message in the protocol
+			if (!(response2.startsWith("understood"))) {
+				noProblems = false;
+				ComMethods.report("ERROR ~ something went wrong with the fourth message in the Bilateral Authentication Protocol.", true);
+			} else {
+				counter = 12; // counter to be used in future messages
+			}
+		}
+
+		if (noProblems) {
+			username = uname;
+		}
+
+		return noProblems; 
+	}
+
+
+	/** Attempts to "log into" specified account (which SHOULD be this User's 
+	  * account, if security is guaranteed) with the SecretServer to gain access
+	  * to the secret using the given password.
+	  * Returns true if successful, false otherwise. */ 
+	public boolean logIn(String password) {
+		String response = sendServerCoded("password:"+password); 
+		boolean success;
+		switch (response) {
+			case "accepted":
+				success = true;
+				break;
+			case "rejected":
+				success = false;
+				break;
+			default:
+				success = false;
+				ComMethods.handleBadResp();
+				break;
+		}
+		return success;
+	}
+
+
+	// Asks SecretServer to send secret. Returns the secret when done.
+	// NOTE: there's no handling for failure to respond
+	public String requestView() { 
+		return sendServerCoded("view");
+	}
+
+
+	// Tells SecretServer to change secret to newSecret.
+	// NOTE: there's no handling for failure to respond
+	public void updateSecret(String newSecret) {
+		String response = sendServerCoded("update:" + newSecret);
+		if (!response.equals("secretupdated")) {
+			ComMethods.handleBadResp();
+		}
+	}
+
+
+	// Tells SecretServer to delete the secret.
+	// NOTE: there's no handling for failure to respond
+	public void deleteSecret() {
+		String response = sendServerCoded("delete");
+		if (!response.equals("secretdeleted")) {
+			ComMethods.handleBadResp();
+		}
+	}
+
+
+
+	// Sends a given message to the SecretServer and returns its response
+	private String sendServer(String message, boolean activeSession) { 
+		ComMethods.report(accountName+" sending message to SecretServer now...", true);
+		String response = server.getMessage(message, activeSession);
+		ComMethods.report(accountName+" has received SecretServer's response.", true);
+		return response; 
+	}
+
+
+	/** Sends a given message to the SecretServer and returns its response,
+	  * but encodes/decodes messages using sessionKey.
+	  * Rejects any "bad" responses. */
+	private String sendServerCoded(String message) { 
+		String toPayload = ComMethods.preparePayload(username, message, counter, sessionKey, simMode);
+		String fromPayload = sendServer(toPayload, true);
+
+		String response = ComMethods.processPayload("SecretServer", fromPayload, counter+1, sessionKey, simMode);
+		counter = counter + 2;
+		return response;
+	}
+
+
+	/** Sets the private key of this accountName, the public key of this 
+	  * accountName, and the public key of the SecretServer, which are found by
+	  * parsing the relevant text files for public keys and private keys of 
+	  * registered users of this secret server storage service.
+	  * NOTE: This is a simulation. In a real setting, the private keys would
+	  * be native to individuals' accounts and not stored together in a file. */
+	private void configureKeys(String accountName) {
+		// accountName's public key
+		String line = ComMethods.getValueFor(accountName, pubkeysfn);
+		int x = line.indexOf(',');
+		my_n = new BigInteger(line.substring(0,x));
+		my_e = new Integer(line.substring(x+1,line.length()));
+
+		// accountName's private key
+		line = ComMethods.getValueFor(accountName, privkeysfn);
+		x = line.indexOf(',');
+		my_d = new BigInteger(line.substring(x+1,line.length()));
+			
+		// SecretServer's public key
+		line = ComMethods.getValueFor("SecretServer", pubkeysfn);
+		x = line.indexOf(',');
+		serv_n = new BigInteger(line.substring(0,x));
+		serv_e = new Integer(line.substring(x+1,line.length()));
+	}
+}

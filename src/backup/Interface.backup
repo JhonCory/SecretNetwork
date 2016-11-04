@@ -1,0 +1,188 @@
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Scanner;
+
+// Interface for the simulation; uses CLI
+public class Interface {
+	/** SecretServer is a simulation of the server that would handle access to 
+	  * stored secrets; User represents the system of user accessing server */
+	private static SecretServer server;
+	private static User user;
+	private static String accountName; // name of the User account we're using
+	private static String username; // User we're CLAIMING to be to the server
+	private static boolean simMode; // reports what's happening in process
+	private static boolean securelyConnected; // user/server sec. connected atm?
+	private static boolean passwordVerified; // password verified atm?
+	private static int fishyActivityCounter; // level of suspicious activity
+	private static int secureCounter; // # of exchanges made in current session
+
+	/** Takes in two arguments
+	  * First argument is name of account you're using
+	  * Second argument, "true"/"false", for toggling simulationMode */
+	public static void main(String[] args) {
+		String[] validUsers = ComMethods.getValidUsers();
+
+		if (args.length < 2) {
+			System.out.println("ERROR ~ arguments missing.");
+			System.out.println("Please specify as arguments the name of the user from whose account you have access to in the simulations and 'true' or 'false', depending on whether you would like detailed reports on the inner workings of the simulation.");
+		} else if (args.length > 2) {
+			System.out.println("ERROR ~ too many arguments.");
+		} else if (!Arrays.asList(validUsers).contains(args[0])) {
+			System.out.println("ERROR ~ first argument is not a valid user of the system. Check validusers.txt for list of valid users.");
+		} else if (!args[1].equals("true") && !args[1].equals("false")) {
+			System.out.println("ERROR ~ second argument is neither 'true' nor 'false'");
+		} else {
+			// Instantiate variables
+			accountName = args[0];
+			simMode = Boolean.valueOf(args[1]);
+			server = new SecretServer(simMode); 
+			user = new User(accountName, server, simMode);
+			securelyConnected = false;
+			fishyActivityCounter = 0;
+
+
+			// Establish secure session
+			while (!securelyConnected) {
+				checkFishiness();
+				establishContact();
+			}
+			
+
+			// Mediate access between user and server
+
+			passwordVerified = false;
+
+			/** End session after an amount of exchanges, so as to protect 
+			  * the security of the communications afterwards */
+			secureCounter = 0; 
+			while (secureCounter < 10) {
+				// Ask for and verify password
+				while (!passwordVerified && secureCounter < 10) {
+					checkFishiness();
+					askPassword();
+					secureCounter++;
+				} 
+				if (passwordVerified) {
+					// Allow access to secrets
+					while (secureCounter < 100) {
+						checkFishiness();
+						offerSecretOptions();
+						secureCounter++;
+						System.out.println();
+						System.out.println();
+					}
+				}
+			}
+		}
+	}
+
+
+	/** Attempts to establish a secure line of contact between the server and the
+	  * user with a user-specified "username"
+	  * NOTE: using the username of a different user will result in an inability 
+	  * to establish a secure connection with the server, due to your user system 
+	  * not having access to the appropriate public key */
+	private static void establishContact() {
+		String uname = getInput("Hello! Please enter your name to send to the server: ");
+		ComMethods.report("Attempting to set up connection between "+accountName+" and SecretServer using username "+uname+"...", simMode);
+
+		boolean successful = user.connectAs(uname);
+		if (!successful) {
+			System.out.println("Connection failed. Please try a different username, "+accountName+".");
+			fishyActivityCounter++;
+		} else {
+			username = uname;
+			System.out.println("Secure connection to SecretServer sucessful!");
+			System.out.println("Welcome, "+username+".");
+			securelyConnected = true; // toggle the bool to end the loop
+		}
+	}
+
+
+	/** Attempts to have the server grant the user access to the specified 
+	  * username's secret using a user-specified password */
+	private static void askPassword() {
+		String password = getInput("Please enter the password: ");
+		ComMethods.report("Attempting to log in to gain access to desired secret using "+password+" as password...", simMode);
+
+		boolean successful = user.logIn(password);
+		if (!successful) {
+			System.out.println("Password rejected. Please try a different password, "+accountName+".");
+			fishyActivityCounter++;
+		} else {
+			System.out.println("Password accepted!");
+			System.out.println("You are now logged in as "+username+".");
+			passwordVerified = true;
+		}
+	}
+
+
+	// Provides the logged in user with access to the secret
+	private static void offerSecretOptions() {
+		System.out.println("You may now view your secret ('view'), replace your existing secret with a new one ('update'), or delete your secret ('delete'). You may also quit at any time ('quit').");
+		System.out.println();
+
+		boolean acceptedInput = false;
+		while (!acceptedInput) {
+			acceptedInput = true; 
+			String input = getInput("What would you like to do now? ");
+
+			switch (input) {
+				case "view":
+					ComMethods.report("Sending request...", simMode);
+					String secret = user.requestView();
+					System.out.println("SECRET:");
+					System.out.println(secret);
+					break;
+				case "update":
+					String newSecret = getInput("Enter the new secret: ");
+					System.out.println("Sending new secret...");
+					user.updateSecret(newSecret);
+					System.out.println("Your secret has been changed.");
+					break;
+				case "delete":
+					System.out.println("Deleting secret...");
+					user.deleteSecret();
+					System.out.println("Secret deleted.");
+					break;
+				case "quit":
+					System.out.println("Have a good day!");
+					System.exit(0);
+					break;
+				default:
+					acceptedInput = false;
+					System.out.println("ERROR ~ invalid input.");
+					System.out.println();
+					break;
+			}
+		}
+	}
+
+
+
+	/** Gives the user a prompt, receives the input, starts a new line, and 
+	  * returns the input as a String */
+	private static String getInput(String prompt) {
+		Scanner s = new Scanner(System.in);
+		System.out.print(prompt);
+		String input = s.next().toString();
+		s.close();
+		System.out.println();
+		System.out.println();
+		return input;
+	}
+
+	/** If User has made 3+ fishy moves, "lock them out of the system"
+	  * NOTE: This is a simulation, so the user obviously won't actually be 
+	  * locked out of any such system. That would be annoying. */
+	private static void checkFishiness() {
+		if (fishyActivityCounter > 2) {
+			System.out.println("We are sorry. Your system is temporarily banned from accessing the server, due to suspicious activity.");
+			System.exit(0);
+		}
+	}
+
+}
