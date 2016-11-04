@@ -1,0 +1,149 @@
+This file explains the security protocols which work to guarantee the security of the secrets in the Secret Network simulation. For an explanation of the idea behind the Secret Network simulation itself, a detailed listing of assumptions made by the simulation, and/or an explanation of how to run the simulation, see README.txt.
+
+=====================================================================================
+=====================================================================================
+		 Bilateral Authentication Protocol with Public-Key RSA
+=====================================================================================
+=====================================================================================
+
+Let's say you run "java Interface Alice false". This means that you'll be simulating someone trying to log in to the SecretServer from Alice's account/system. Now, you'll immediately be prompted for a username to send the SecretServer. If you use "Alice", you'll be asked for your password; however, if you use "Bob", you will get an error. Why is that?
+
+Well, for a User to set up a secure line of communication with the SecretServer, they must first successfully run a Bilateral Authentical Protocol to establish the session key. Here's how this specific protocol, which revolves around public-key RSA, works:
+
+1. User -> SecretServer: User.name || E_kS(User.name || nonce_User)
+	(i) User generates a random 128-bit nonce, 'nonce_User'
+	(ii) User concatenates their name with nonce_User, forming the payload's body
+	(iii) User encrypts the payload body with SecretServer's public key, finishing the body of the payload
+	(iv) User concatenates their name onto the front, finishing the payload
+	(v) User sends SecretServer the payload
+	(vi) SecretServer receives User's payload
+	(vii) SecretServer verifies that the name at front is a "valid user"
+	(viii) SecretServer decrypts the payload body using its private key
+	(ix) SecretServer checks the name from the beginning of the transmission against the name in the decrypted payload
+	(x) SecretServer notes down 'nonce_User'
+
+2. SecretServer -> User: E_kU(nonce_User || "SecretServer" || nonce_Srvr)
+	(i) SecretServer generates a random 128-bit nonce, 'nonce_Srvr'
+	(ii) SecretServer concatenates nonce_User, "SecretServer", and nonce_Srvr
+	(iii) SecretServer encrypts this with User's public key, finishing the payload
+	(iv) SecretServer sends User the payload
+	(v) User receives SecretServer's payload
+	(vi) User decrypts the payload using User's private key
+	(vii) User verifies nonce_User and "SecretServer"
+	(viii) User notes down 'nonce_Srvr'
+
+3. User -> SecretServer: E_kS(nonce_Srvr || sessionKey)
+	(i) User generates a random 128-bit key to be used to keep the upcoming session between User and SecretServer secure, 'sessionKey'
+	(ii) User concatenates nonce_Srvr with sessionKey
+	(iii) User encrypts this with SecretServer's public key, finishing the payload
+	(iv) User sends SecretServer the payload
+	(v) SecretServer receives User's payload
+	(vi) SecretServer decrypts the payload using SecretServer's private key
+	(vii) SecretServer verifies nonce_Srvr
+	(viii) SecretServer notes down the sessionKey
+
+4. SecretServer -> User: encryptSym_sessionKey("understood" || "SecretServer" || 11)
+	(i) SecretServer initializes 'counter_Srvr' = 11
+	(ii) SecretServer concatenates "understood", "SecretServer", and counter
+	(iii) SecretServer uses the sessionKey to encrypt this under symmetric encryption, forming the payload
+	(iv) SecretServer increments counter += 2
+	(v) SecretServer sends User the payload
+	(vi) User receives SecretServer's payload
+	(vii) User decrypts the payload using the sessionKey
+	(viii) User checks that the message is "understood" || "SecretServer" || 11
+	(ix) User initializes 'counter_User' = 12
+
+
+Now both SecretServer and User have authenticated each other and know that they are the only ones who know the sessionKey, insofar as they are sure that any potential Dolev-Yao eavesdroppers will not be able to factor the public key n-values or somehow steal either User or SecretServer's private key! All further communications between SecretServer and User will follow a format similar to that of Step 4, with the party sending the concatenation of a message, their name, and the current value of their 'counter', encrypted using the sessionKey under symmetric encryption (further details on that in the "Symmetric Encryption" section).
+
+So, why is it that you get an error if you try to log in as anyone other than Alice from Alice's account/system? Well, while Bob has the necessary information to perform Step 1 while passing himself off as Alice, he'll get stuck at part 2.(vi), because BOB's account/system does not have access to ALICE's private key!
+
+
+
+=====================================================================================
+=====================================================================================
+				    SECURITY COUNTER
+=====================================================================================
+=====================================================================================
+
+To ensure the long-term protection of the messages sent between the SecretServer and the User during the session, the number of symmetric encryptions made using a session key should be limited. Hence, there is a 'securityCounter' variable (built into the Interface class for the purposes of this simulation) which is used to detect when a certain number of transmissions have been made under the current session key so that the program can automatically terminate, requiring the Bilateral Authentication Protocol to be run again before further encrypted transmissions to the SecretServer are allowed. For the purposes of this simulation, I arbitrarily chose the maximum number of exchanges to be six.
+
+
+=====================================================================================
+=====================================================================================
+				  HYBRID RSA ENCRYPTION
+=====================================================================================
+=====================================================================================
+
+In "Bilateral Authentication Protocol" section, it was mentioned multiple times that payloads were "encrypted with RSA". However, RSA only works if the plaintext message - represented as a BigInteger - is smaller than the public key's value for 'n'. As such, the payloads are actually encrypted with HYBRID RSA. 
+
+Here are the steps that are taken in the Secret Network program to perform hybrid RSA encryption (the implementation of which may be found in SecureMethods.java): 
+	(i) A random 128-bit key is generated 
+	(ii) The plaintext message is encrypted with the key under symmetric encryption
+	(iii) The key is encrypted under the public key in RSA
+	(iv) A 'partition' is generated, consisting of three bytes of values 01, 02, and 03, respectively
+	(v) The encrypted key, the partition, and the encrypted message are concatenated
+
+To decrypt this "payload" using the private RSA key, one simply decrypts the key found to the left of the partition and uses it to decrypt the message found to the right of the partition.
+
+RSA itself is implemented manually in this program, and uses values for n of size 1024+ bits.
+
+
+
+=====================================================================================
+=====================================================================================
+				   SYMMETRIC ENCRYPTION
+=====================================================================================
+=====================================================================================
+
+For the purposes of this simulation, AES (Advanced Encryption Standard) encryption is used with CBC (Cipher Block Chaining), implemented using Java's Cipher object with algorithm "AES/CBC/NoPadding". PKCS#7 padding is manually implemented. 
+
+
+=====================================================================================
+=====================================================================================
+				  	HASHES
+=====================================================================================
+=====================================================================================
+
+Rather than keep a list of valid users and their passwords which could be stolen, SecretServer keeps a list of the digests of those passwords. 
+
+An MD5 hash is used. While there is an implied requirement that valid users' passwords must be at least eight characters long, contain at least one number or special character, and contain both upper- and lower-case letters, key stretching is used to provide a modicum of extra protection against rainbow tables; the hash function is used 1000 times to output the digest.
+
+In a real-world scenario, you would probably want to add some large salt and perform other key-strengthening methods to protect the integrity of the hashing process even further.
+
+
+=====================================================================================
+=====================================================================================
+		    SECRET ENCRYPTION - THE EXTRA STEP OF SECURITY
+=====================================================================================
+=====================================================================================
+
+If Alice wants to update her stored secret, she needs to send an update message to the SecretServer, using the active session payload format (as demonstrated by Step 4 of the Bilateral Authentication Protocol above). However, instead of using the secret itself as the message which goes in the payload, Alice will first encrypt her secret using her public key, and use the encrypted secret as the message. That means that the SecretServer will store in the secrets.txt file Alice's secret as encrypted under Alice's public key; thus, the secret can only possibly be read if the person has Alice's private key.
+
+As a result, even if Earl were a Dolev-Yao attacker who was able to steal the secrets and/or learn the SecretServer's private key, he would still be unable to learn Alice's secret. 
+
+
+=====================================================================================
+=====================================================================================
+				  SUSPICIOUS ACTIVITY
+=====================================================================================
+=====================================================================================
+
+As an added precaution against eavesdroppers and/or impostors, the Interface class tracks "suspicious activity" from the user using a variable. When 'fishyActivityCounter' (which is initialized at zero) equals four or above (four being chosen arbitrarily in this case), the program automatically terminates. If this were a real-world system and not a simulation, the user would be "temporarily locked out" from trying to contact the server based on their IP address, or perhaps the account that they were trying to access would be "locked" until the account's owner responded to an email. 
+
+I counted the following as "suspicious activity":
+	- Using a "bad" username: 
+		x fishyActivityCounter += 1.0
+	- Using the wrong password: 
+		x fishyActivityCounter += 1.0
+	- Trying to send a message to the Server for a command that doesn't exist: 
+		x fishyActivityCounter += 0.5
+		x (Note: this probably isn't actually all that "fishy", at least in the simulation, but it might in a real-world extension of the Secret Network, depending on implementation.) 
+
+
+=====================================================================================
+=====================================================================================
+=====================================================================================
+=====================================================================================
+
+This software was written by John Khouri in 2016 as part of a coding challenge for Illumio.
