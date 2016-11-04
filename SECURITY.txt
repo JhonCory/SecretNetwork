@@ -1,4 +1,4 @@
-This file explains the security protocols which work to guarantee the security of the secrets in the Secret Network simulation. For an explanation of the idea behind the Secret Network simulation itself, a detailed listing of assumptions made by the simulation, and/or an explanation of how to run the simulation, see README.txt.
+This file explains the security protocols which work to guarantee the security of the secrets in the Secret Network simulation. For an explanation of the idea behind the Secret Network simulation itself, a detailed listing of assumptions made by the simulation, and/or an explanation of how to run the simulation, see INTRODUCTION.txt.
 
 =====================================================================================
 =====================================================================================
